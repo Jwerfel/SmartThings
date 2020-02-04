@@ -1,15 +1,15 @@
 /*****************************************************************************************************************
- *  Copyright David Lomas (codersaur)
+ *  Copyright Julian Werfel
  *
  *  Name: InfluxDB Logger
  *
- *  Date: 2017-04-03
+ *  Date: 2020-01-23
  *
  *  Version: 1.11
  *
  *  Source: https://github.com/codersaur/SmartThings/tree/master/smartapps/influxdb-logger
  *
- *  Author: David Lomas (codersaur)
+ *  Author: Julian Werfel and David Lomas (codersaur)
  *
  *  Description: A SmartApp to log SmartThings device states to an InfluxDB database.
  *
@@ -30,9 +30,9 @@
  *   for the specific language governing permissions and limitations under the License.
  *****************************************************************************************************************/
 definition(
-    name: "InfluxDB Logger",
-    namespace: "codersaur",
-    author: "David Lomas (codersaur)",
+    name: "InfluxDB Logger - jwerfel",
+    namespace: "jwerfel",
+    author: "Julian Werfel",
     description: "Log SmartThings device states to InfluxDB",
     category: "My Apps",
     iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
@@ -293,13 +293,23 @@ def handleEvent(evt) {
     // Don't pull these from the evt.device as the app itself will be associated with one location.
     def locationId = escapeStringForInfluxDB(location.id)
     def locationName = escapeStringForInfluxDB(location.name)
+    def status = ''
 
     def unit = escapeStringForInfluxDB(evt.unit)
     def value = escapeStringForInfluxDB(evt.value)
     def valueBinary = ''
-    
+        
     def data = "${measurement},deviceId=${deviceId},deviceName=${deviceName},groupId=${groupId},groupName=${groupName},hubId=${hubId},hubName=${hubName},locationId=${locationId},locationName=${locationName}"
+	def statusData = "status,deviceId=${deviceId},deviceName=${deviceName},groupId=${groupId},groupName=${groupName},hubId=${hubId},hubName=${hubName},locationId=${locationId},locationName=${locationName}"    
     
+    if(evt instanceof java.util.LinkedHashMap) {
+        status = evt.status;
+        log.info("Called by softPoll, status is: "+ status + " for device: "+ deviceName);
+    }
+    else {
+    	//log.info("called by event for device: " + deviceName);
+        status = '';
+    }
     // Unit tag and fields depend on the event type:
     //  Most string-valued attributes can be translated to a binary value too.
     if ('acceleration' == evt.name) { // acceleration: Calculate a binary value (active = 1, inactive = 0)
@@ -483,10 +493,65 @@ def handleEvent(evt) {
         data += ",unit=${unit} value=${value}"
     }
     
+    
+    if(status != '' && status != 'null') {
+    	unit = 'status'
+        value = '"' + status + '"'
+        valueBinary = (('ONLINE' == status) || ('ACTIVE' == status)) ? '1i' : '0i'
+        statusData += ",unit=${unit} value=${value},valueBinary=${valueBinary}"
+        data += "\n" + statusData;
+        //log.info("Writing two entries for [" + deviceName + "]: " + data);
+    }
+    
     // Post data to InfluxDB:
-    postToInfluxDB(data)
+    postToInfluxDB(data);
+    
+    //log.info("status is: " + status);
+    /*
+    if(status != '' && status != 'null') {
+        log.info("logging status - " + status + " for device: "+ deviceName);
+        // post online  status of the device
+        unit = 'status'
+        value = '"' + status + '"'
+        valueBinary = (('ONLINE' == status) || ('ACTIVE' == status)) ? '1i' : '0i'
+        statusData += ",unit=${unit} value=${value},valueBinary=${valueBinary}"
+        
+        if(deviceName == 'Cabinet') {
+            log.info("statusDataForCabinet: " + statusData);
+        }
+        //log.info("statusData: " + statusData);
 
+        //postToInfluxDB(statusData);
+        log.info("posted status data for " + deviceName + " to influx");
+    }
+    else {
+    	log.info("not logging status for device: " + deviceName + ", status is: " + status);
+    }*/
 }
+
+/*
+def postDeviceStatus(device) {
+    log.info("postDeviceStatus (" + device + ")");
+    def status = escapeStringForInfluxDB(getGroupName(device.getStatus()))
+    def deviceName = escapeStringForInfluxDB(device.displayName);
+    def groupId = escapeStringForInfluxDB(device.groupId)
+    def groupName = escapeStringForInfluxDB(getGroupName(device.groupId))
+    def hubId = escapeStringForInfluxDB(device.hubId)
+    def hubName = escapeStringForInfluxDB(device.hub.toString())
+    // Don't pull these from the evt.device as the app itself will be associated with one location.
+    def locationId = escapeStringForInfluxDB(location.id)
+    def locationName = escapeStringForInfluxDB(location.name)
+    def statusData = "status,deviceId=${device.id},deviceName=${deviceName},groupId=${groupId},groupName=${groupName},hubId=${hubId},hubName=${hubName},locationId=${locationId},locationName=${locationName}"
+
+    def unit = 'status'
+    def value = '"' + status + '"'
+    def valueBinary = (('ONLINE' == status) || ('ACTIVE' == status)) ? '1i' : '0i'
+    statusData += ",unit=${unit} value=${value},valueBinary=${valueBinary}"
+
+    log.info("postDeviceStatus statusData(" + statusData + ")");
+
+    postToInfluxDB(statusData)
+}*/
 
 
 /*****************************************************************************************************************
@@ -514,18 +579,25 @@ def softPoll() {
         devs = settings."${da.devices}"
         if (devs && (da.attributes)) {
             devs.each { d ->
+                def status = d.getStatus();
+                def i = 0;
                 da.attributes.each { attr ->
                     if (d.hasAttribute(attr) && d.latestState(attr)?.value != null) {
                         logger("softPoll(): Softpolling device ${d} for attribute: ${attr}","info")
                         // Send fake event to handleEvent():
+                        if(i > 0)
+                            status = '';
+                        log.info("softpoll (" + d.displayName + "), status (" + status + "), i (" + i + ")");
                         handleEvent([
                             name: attr, 
                             value: d.latestState(attr)?.value,
                             unit: d.latestState(attr)?.unit,
                             device: d,
                             deviceId: d.id,
-                            displayName: d.displayName
+                            displayName: d.displayName,
+                            status: status
                         ])
+                        i++;
                     }
                 }
             }
@@ -563,6 +635,7 @@ def logSystemProperties() {
 	}
 
 	// Hub Properties:
+    /*
     if (prefLogHubProperties) {
        	location.hubs.each { h ->
         	try {
@@ -585,6 +658,7 @@ def logSystemProperties() {
        	}
 
 	}
+    */
 
 }
 
@@ -788,10 +862,9 @@ private escapeStringForInfluxDB(str) {
  *  See: https://community.smartthings.com/t/accessing-group-within-a-smartapp/6830
  **/
 private getGroupName(id) {
-
     if (id == null) {return 'Home'}
     else if (id == 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX') {return 'Kitchen'}
     else if (id == 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX') {return 'Lounge'}
     else if (id == 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX') {return 'Office'}
-    else {return 'Unknown'}    
+    else {return 'Unknown'} 
 }
